@@ -1,0 +1,49 @@
+plugins {
+    id 'com.android.application'
+}
+
+// La chiave di firma arriva dai "secrets" di GitHub: sempre la stessa,
+// così gli aggiornamenti dell'APK si installano sopra senza perdere i dati.
+def ksFile = System.getenv('KEYSTORE_FILE')
+
+android {
+    namespace 'it.scheda.palestra'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'it.scheda.palestra'
+        minSdk 29
+        targetSdk 34
+        versionCode Integer.parseInt(System.getenv('VERSION_CODE') ?: '1')
+        versionName '1.0'
+    }
+
+    signingConfigs {
+        fissa {
+            if (ksFile) {
+                storeFile file(ksFile)
+                storePassword System.getenv('KEYSTORE_PASSWORD')
+                keyAlias 'scheda'
+                keyPassword System.getenv('KEYSTORE_PASSWORD')
+                storeType 'pkcs12'
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig ksFile ? signingConfigs.fissa : signingConfigs.debug
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    lint {
+        checkReleaseBuilds false
+        abortOnError false
+    }
+}

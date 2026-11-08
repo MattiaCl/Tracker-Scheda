@@ -2,7 +2,9 @@
 'use strict';
 
 const KEY = 'gymlog.v1';
-const VERSION = '1.7 · senza diciture "prima"';
+const VERSION = '1.8 · supporto app Android';
+// dentro l'app Android esiste window.AndroidApp: timer, notifiche, file e stampa li gestisce Android
+const NATIVE = window.AndroidApp || null;
 const uid = () => Math.random().toString(36).slice(2, 10);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const num = v => { if (v === '' || v == null) return null; const n = parseFloat(String(v).replace(',', '.')); return isNaN(n) ? null : n; };
@@ -430,7 +432,8 @@ function reportTables() {
 
 function vSettings() {
   const p = prog();
-  const perm = 'Notification' in window ? Notification.permission : 'unsupported';
+  let perm = 'Notification' in window ? Notification.permission : 'unsupported';
+  if (NATIVE) try { perm = NATIVE.notifStatus(); } catch (e) { }
   return {
     title: 'Impostazioni', back: 'home',
     html: `<div class="section">Schede</div>
@@ -451,6 +454,7 @@ function vSettings() {
         <label class="switch"><input type="checkbox" data-f="vib" ${S.settings.vibrate ? 'checked' : ''}><span>Vibrazione a fine recupero</span></label>
         <div class="stack">
           ${perm === 'granted' ? `<div class="muted small">${ic('bell', 14)} Notifiche attive: quando esci dall'app vedi il timer nella tendina.</div>`
+            : perm === 'denied' && NATIVE ? `<button class="soft" data-act="notifyperm">${ic('bell', 16)} Notifiche bloccate · apri impostazioni</button>`
             : perm === 'denied' ? `<div class="muted small">${ic('bell', 14)} Notifiche bloccate: riattivale dalle impostazioni del sito in Chrome.</div>`
             : perm === 'default' ? `<button class="soft" data-act="notifyperm">${ic('bell', 16)} Attiva notifiche del timer</button>` : ''}
           <button class="soft" data-act="testtimer">${ic('timer', 16)} Prova timer (10 secondi)</button>
@@ -465,7 +469,7 @@ function vSettings() {
         </div>
         <input type="file" id="restoreFile" accept=".json,application/json" hidden>
       </section>
-      <p class="muted small" style="text-align:center">Versione ${VERSION}</p>`
+      <p class="muted small" style="text-align:center">Versione ${VERSION}${NATIVE ? ' · app Android' : ''}</p>`
   };
 }
 
@@ -611,7 +615,7 @@ document.addEventListener('click', e => {
     /* report */
     case 'xlsx': return exportXlsx(false);
     case 'share': return exportXlsx(true);
-    case 'print': return window.print();
+    case 'print': return NATIVE ? NATIVE.print() : window.print();
     /* settings */
     case 'pactivate': S.activeId = b.dataset.p; save(); return render();
     case 'pclone': {
@@ -667,7 +671,16 @@ function restore(file) {
     S = data; save(); toast('Backup importato'); go({ name: 'home' });
   }).catch(() => toast('File di backup non valido'));
 }
+function nativeSave(blob, name, share) {
+  const r = new FileReader();
+  r.onload = () => {
+    try { NATIVE.saveFile(String(r.result).split(',')[1], name, blob.type || 'application/octet-stream', !!share); }
+    catch (e) { toast('Salvataggio non riuscito'); }
+  };
+  r.readAsDataURL(blob);
+}
 function download(blob, name) {
+  if (NATIVE) return nativeSave(blob, name, false);
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob); a.download = name;
   document.body.appendChild(a); a.click(); a.remove();
@@ -724,6 +737,7 @@ async function exportXlsx(share) {
   const name = `Resoconto ${p.name.replace(/[\\/:*?"<>|]/g, '')} ${today()}.xlsx`;
   const type = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
   const file = new File([buf], name, { type });
+  if (NATIVE) return nativeSave(file, name, share);
   if (share && navigator.canShare && navigator.canShare({ files: [file] })) {
     try { await navigator.share({ files: [file], title: 'Resoconto allenamento' }); } catch (e) { /* annullato */ }
     return;
@@ -741,15 +755,43 @@ function startTimer(sec, label) {
   localStorage.setItem('gymlog.timer', JSON.stringify({ end: T.end, total: T.total, label }));
   askNotify();
   closeNotifs('rest-end');
+  nativeStart();
   runTimer();
 }
+// app Android: notifica con conto alla rovescia e sveglia di fine recupero gestite da Android
+function nativeStart() {
+  if (NATIVE) try { NATIVE.timerStart(T.end, T.total, T.label || 'Recupero', !!S.settings.sound, !!S.settings.vibrate); } catch (e) { }
+}
+function nativeSync() {
+  if (!NATIVE) return;
+  let st = null;
+  try { st = JSON.parse(NATIVE.timerState() || 'null'); } catch (e) { }
+  if (st && st.end > Date.now()) {
+    if (T.fired || st.end !== T.end) {
+      T.end = st.end; T.total = st.total; T.label = st.label || T.label; T.fired = false;
+      localStorage.setItem('gymlog.timer', JSON.stringify({ end: T.end, total: T.total, label: T.label }));
+      runTimer();
+    }
+  } else if (!T.fired && T.end > Date.now() + 1500) {
+    // fermato dalla notifica con "Salta"
+    T.fired = true; clearInterval(T.iv); clearTimeout(T.to);
+    localStorage.removeItem('gymlog.timer'); T.el.classList.remove('show', 'end');
+  } else tick();
+}
+window.nativeTimerSync = nativeSync;
+// tasto indietro di Android = freccia in alto
+window.androidBack = () => {
+  const b = hdr.querySelector('.hbtn[data-go]');
+  if (view.name !== 'home' && b) { b.click(); return true; }
+  return false;
+};
 function runTimer() {
   clearInterval(T.iv); clearTimeout(T.to);
   T.el.classList.add('show'); T.el.classList.remove('end');
   document.getElementById('tlbl').textContent = T.label;
   T.iv = setInterval(tick, 250); tick();
   T.to = setTimeout(tick, Math.max(0, T.end - Date.now()) + 30);
-  if (document.hidden) startNotifLoop();
+  if (document.hidden && !NATIVE) startNotifLoop();
 }
 function tick() {
   if (T.fired) return;
@@ -766,9 +808,14 @@ function timerEnd() {
   T.el.classList.add('end');
   document.getElementById('tlbl').textContent = 'Recupero finito';
   document.getElementById('ttime').textContent = 'Vai!';
-  if (S.settings.vibrate && navigator.vibrate) navigator.vibrate([400, 150, 400, 150, 700]);
-  if (S.settings.sound) beep();
-  if (document.hidden && canNotify()) {
+  // nell'app Android, se il recupero è finito mentre eri fuori, ha già suonato Android
+  const byAndroid = NATIVE && (document.hidden || Date.now() - T.end > 3000);
+  if (NATIVE && !byAndroid) try { NATIVE.timerStop(); } catch (e) { }
+  if (!byAndroid) {
+    if (S.settings.vibrate && navigator.vibrate) navigator.vibrate([400, 150, 400, 150, 700]);
+    if (S.settings.sound) beep();
+  }
+  if (!NATIVE && document.hidden && canNotify()) {
     navigator.serviceWorker.ready.then(r => r.showNotification('Recupero finito 💪', {
       tag: 'rest-end', body: T.label + ' · tocca per tornare all\'allenamento', icon: 'icon-192.png',
       vibrate: S.settings.vibrate ? [400, 150, 400, 150, 700] : [], silent: !S.settings.sound && !S.settings.vibrate
@@ -779,13 +826,15 @@ function timerEnd() {
 function timerCtl(cmd) {
   if (cmd === 'stop') {
     T.fired = true; clearInterval(T.iv); clearTimeout(T.to); stopNotifLoop();
+    if (NATIVE) try { NATIVE.timerStop(); } catch (e) { }
     localStorage.removeItem('gymlog.timer'); T.el.classList.remove('show', 'end'); return;
   }
   if (T.fired) { startTimer(Math.max(5, +cmd), T.label || 'Recupero'); return; }
   T.end = Math.max(Date.now() + 1000, T.end + +cmd * 1000); T.total = Math.max(T.total + +cmd, 1);
   localStorage.setItem('gymlog.timer', JSON.stringify({ end: T.end, total: T.total, label: T.label }));
+  nativeStart();
   runTimer();
-  if (document.hidden) showRestNotif();
+  if (document.hidden && !NATIVE) showRestNotif();
 }
 
 /* notifica con il conto alla rovescia quando esci dall'app */
@@ -834,9 +883,11 @@ function beep() {
   });
 }
 function askNotify() {
+  if (NATIVE) { try { if (NATIVE.notifStatus() !== 'granted') NATIVE.requestNotif(); } catch (e) { } return; }
   if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission().then(() => { if (view.name === 'settings') render(); }).catch(() => {});
 }
 document.addEventListener('visibilitychange', () => {
+  if (NATIVE) { if (!document.hidden) { nativeSync(); manageWakeLock(); } return; }
   if (document.hidden) { if (!T.fired) startNotifLoop(); }
   else { stopNotifLoop(); closeNotifs('rest-end'); tick(); manageWakeLock(); }
 });
@@ -845,6 +896,7 @@ document.addEventListener('visibilitychange', () => {
 let wakeLock = null;
 async function manageWakeLock() {
   const want = view.name === 'workout';
+  if (NATIVE) { try { NATIVE.keepScreenOn(want); } catch (e) { } return; }
   try {
     if (want && !wakeLock && 'wakeLock' in navigator && !document.hidden) {
       wakeLock = await navigator.wakeLock.request('screen');
@@ -859,6 +911,7 @@ try {
   const saved = JSON.parse(localStorage.getItem('gymlog.timer'));
   if (saved && saved.end > Date.now()) { T.end = saved.end; T.total = saved.total; T.label = saved.label; T.fired = false; runTimer(); }
 } catch (e) { }
+nativeSync();
 render();
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
   navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(r => r.update()).catch(() => {});

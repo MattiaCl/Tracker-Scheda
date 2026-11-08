@@ -2,6 +2,7 @@ package it.scheda.palestra;
 
 import android.Manifest;
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.app.NotificationManager;
 import android.content.ClipData;
 import android.content.ContentResolver;
@@ -20,6 +21,7 @@ import android.provider.Settings;
 import android.util.Base64;
 import android.view.WindowManager;
 import android.webkit.JavascriptInterface;
+import android.webkit.JsResult;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceError;
@@ -29,8 +31,13 @@ import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.Toast;
 
+import org.json.JSONObject;
+
+import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.lang.ref.WeakReference;
+import java.nio.charset.StandardCharsets;
 
 /**
  * App Android "Scheda": mostra la web app pubblicata su GitHub Pages (così gli aggiornamenti
@@ -41,6 +48,7 @@ public class MainActivity extends Activity {
     private static final String APP_HOST = "mattiacl.github.io";
     private static final int REQ_FILE = 2;
     private static final int REQ_NOTIF = 3;
+    private static final int REQ_BACKUP = 4;
 
     private static volatile boolean visible = false;
     private static WeakReference<MainActivity> current = new WeakReference<>(null);
@@ -103,6 +111,28 @@ public class MainActivity extends Activity {
             }
         });
         web.setWebChromeClient(new WebChromeClient() {
+            // finestre "conferma" e "avviso" della pagina, mostrate da Android
+            @Override
+            public boolean onJsConfirm(WebView v, String url, String msg, JsResult r) {
+                new AlertDialog.Builder(MainActivity.this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                        .setMessage(msg)
+                        .setPositiveButton("OK", (d, w) -> r.confirm())
+                        .setNegativeButton("Annulla", (d, w) -> r.cancel())
+                        .setOnCancelListener(d -> r.cancel())
+                        .show();
+                return true;
+            }
+
+            @Override
+            public boolean onJsAlert(WebView v, String url, String msg, JsResult r) {
+                new AlertDialog.Builder(MainActivity.this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                        .setMessage(msg)
+                        .setPositiveButton("OK", (d, w) -> r.confirm())
+                        .setOnCancelListener(d -> r.confirm())
+                        .show();
+                return true;
+            }
+
             @Override
             public boolean onShowFileChooser(WebView v, ValueCallback<Uri[]> cb, FileChooserParams params) {
                 if (fileCb != null) fileCb.onReceiveValue(null);
@@ -171,6 +201,10 @@ public class MainActivity extends Activity {
     @SuppressWarnings("deprecation")
     protected void onActivityResult(int req, int res, Intent data) {
         super.onActivityResult(req, res, data);
+        if (req == REQ_BACKUP) {
+            if (res == RESULT_OK && data != null && data.getData() != null) readBackup(data.getData());
+            return;
+        }
         if (req == REQ_FILE && fileCb != null) {
             Uri[] r = null;
             if (res == RESULT_OK && data != null && data.getData() != null) r = new Uri[]{data.getData()};
@@ -209,6 +243,33 @@ public class MainActivity extends Activity {
         // già negate in modo definitivo: apro le impostazioni delle notifiche dell'app
         Intent i = new Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, getPackageName());
         try { startActivity(i); } catch (Exception ignored) { }
+    }
+
+    /* ---------- importazione backup: Android legge il file e lo passa alla pagina ---------- */
+    @SuppressWarnings("deprecation")
+    private void pickBackup() {
+        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        i.addCategory(Intent.CATEGORY_OPENABLE);
+        i.setType("*/*");
+        try {
+            startActivityForResult(i, REQ_BACKUP);
+        } catch (Exception e) {
+            Toast.makeText(this, "Impossibile aprire la scelta file", Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void readBackup(Uri uri) {
+        try (InputStream in = getContentResolver().openInputStream(uri)) {
+            if (in == null) throw new IllegalStateException("stream");
+            ByteArrayOutputStream bos = new ByteArrayOutputStream();
+            byte[] buf = new byte[16384];
+            int n;
+            while ((n = in.read(buf)) > 0) bos.write(buf, 0, n);
+            String text = new String(bos.toByteArray(), StandardCharsets.UTF_8);
+            web.evaluateJavascript("window.nativeRestore && window.nativeRestore(" + JSONObject.quote(text) + ")", null);
+        } catch (Exception e) {
+            Toast.makeText(this, "Impossibile leggere il file", Toast.LENGTH_LONG).show();
+        }
     }
 
     /* ---------- salvataggio e condivisione file ---------- */
@@ -276,6 +337,9 @@ public class MainActivity extends Activity {
         public void saveFile(String b64, String name, String mime, boolean share) {
             MainActivity.this.saveFile(b64, name, mime, share);
         }
+
+        @JavascriptInterface
+        public void pickBackup() { runOnUiThread(MainActivity.this::pickBackup); }
 
         @JavascriptInterface
         public void print() {

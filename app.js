@@ -2,7 +2,7 @@
 'use strict';
 
 const KEY = 'gymlog.v1';
-const VERSION = '1.8 · supporto app Android';
+const VERSION = '1.9 · import backup nell\'app Android';
 // dentro l'app Android esiste window.AndroidApp: timer, notifiche, file e stampa li gestisce Android
 const NATIVE = window.AndroidApp || null;
 const uid = () => Math.random().toString(36).slice(2, 10);
@@ -638,7 +638,9 @@ document.addEventListener('click', e => {
       const blob = new Blob([JSON.stringify(S, null, 1)], { type: 'application/json' });
       return download(blob, `backup-palestra-${today()}.json`);
     }
-    case 'restore': return document.getElementById('restoreFile').click();
+    case 'restore':
+      if (NATIVE && NATIVE.pickBackup) return NATIVE.pickBackup();
+      return document.getElementById('restoreFile').click();
   }
 });
 /* swipe orizzontale per cambiare esercizio */
@@ -664,13 +666,18 @@ function move(arr, item, dir) {
   [arr[i], arr[j]] = [arr[j], arr[i]];
 }
 function restore(file) {
-  file.text().then(t => {
-    const data = JSON.parse(t);
-    if (!data || !Array.isArray(data.programs)) throw new Error();
-    if (!confirm('Sostituire tutti i dati attuali con quelli del backup?')) return;
-    S = data; save(); toast('Backup importato'); go({ name: 'home' });
-  }).catch(() => toast('File di backup non valido'));
+  file.text().then(restoreText).catch(() => toast('File di backup non valido'));
 }
+function restoreText(t) {
+  let data = null;
+  try { data = JSON.parse(t); } catch (e) { }
+  if (!data || !Array.isArray(data.programs) || !data.programs.length) { toast('File di backup non valido'); return; }
+  const n = data.programs.reduce((a, p) => a + Object.values(p.logs || {}).reduce((b, w) => b + Object.keys(w).length, 0), 0);
+  if (!confirm(`Backup con ${data.programs.length} ${data.programs.length > 1 ? 'schede' : 'scheda'} e ${n} allenamenti registrati.\nSostituire tutti i dati attuali?`)) return;
+  S = data; save(); load(); toast('Backup importato'); go({ name: 'home' });
+}
+// app Android: il file lo legge Android e lo passa qui
+window.nativeRestore = restoreText;
 function nativeSave(blob, name, share) {
   const r = new FileReader();
   r.onload = () => {

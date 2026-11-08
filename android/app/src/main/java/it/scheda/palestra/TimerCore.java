@@ -148,7 +148,7 @@ final class TimerCore {
 
         Notification n = new Notification.Builder(c, endChannel(sound, vibrate))
                 .setSmallIcon(R.drawable.ic_stat_timer)
-                .setColor(0xFFF28B8B)
+                .setColor(0xFFEF5350)
                 .setContentTitle("Recupero finito 💪")
                 .setContentText((label.isEmpty() ? "" : label + " · ") + "tocca per tornare all'allenamento")
                 .setCategory(Notification.CATEGORY_REMINDER)
@@ -175,7 +175,7 @@ final class TimerCore {
 
         Notification n = new Notification.Builder(c, CH_RUN)
                 .setSmallIcon(R.drawable.ic_stat_timer)
-                .setColor(0xFFF28B8B)
+                .setColor(0xFFEF5350)
                 .setContentTitle("Recupero · " + label)
                 .setStyle(new Notification.DecoratedCustomViewStyle())
                 .setCustomContentView(rv)

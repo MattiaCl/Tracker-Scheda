@@ -2,7 +2,7 @@
 'use strict';
 
 const KEY = 'gymlog.v1';
-const VERSION = '1.9 · import backup nell\'app Android';
+const VERSION = '2.0 · rosso più deciso';
 // dentro l'app Android esiste window.AndroidApp: timer, notifiche, file e stampa li gestisce Android
 const NATIVE = window.AndroidApp || null;
 const uid = () => Math.random().toString(36).slice(2, 10);

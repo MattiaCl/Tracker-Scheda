@@ -105,7 +105,7 @@ public class MainActivity extends Activity {
                         + "<h2 style='font-weight:600'>Nessuna connessione</h2>"
                         + "<p style='color:#8a8d96'>La prima apertura serve internet. Dopo l'app funziona anche offline.</p>"
                         + "<button onclick=\"location.href='" + APP_URL + "'\" style='margin-top:16px;padding:12px 22px;border:0;"
-                        + "border-radius:12px;background:#f28b8b;color:#2a0b0b;font-size:16px;font-weight:600'>Riprova</button>"
+                        + "border-radius:12px;background:#ef5350;color:#2a0606;font-size:16px;font-weight:600'>Riprova</button>"
                         + "</body></html>";
                 v.loadDataWithBaseURL(null, html, "text/html", "utf-8", null);
             }

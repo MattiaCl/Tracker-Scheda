@@ -2,7 +2,7 @@
 'use strict';
 
 const KEY = 'gymlog.v1';
-const VERSION = '1.5 · tema rosso';
+const VERSION = '1.7 · senza diciture "prima"';
 const uid = () => Math.random().toString(36).slice(2, 10);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const num = v => { if (v === '' || v == null) return null; const n = parseFloat(String(v).replace(',', '.')); return isNaN(n) ? null : n; };
@@ -23,7 +23,28 @@ function load() {
     save();
   }
   S.settings = Object.assign({ sound: true, vibrate: true }, S.settings || {});
+  // migrazione: deduce le serie extra dalla tecnica per gli esercizi che non le hanno ancora
+  S.programs.forEach(p => p.days.forEach(d => d.exercises.forEach(ex => {
+    if (ex.extra === undefined) ex.extra = guessExtra(ex.technique);
+  })));
+  save();
 }
+
+/* serie extra (drop / rest-pause) dedotte dal testo della tecnica */
+function guessExtra(tech) {
+  const t = String(tech || '').toLowerCase();
+  if (/rest.?pause|myo/.test(t)) {
+    const m = t.match(/(\d+)\s*[x×]/);
+    return { type: 'rp', n: m ? Math.min(+m[1], 6) : 2, all: false };
+  }
+  if (/drop|stripping|scalare/.test(t)) {
+    const n = /tripl/.test(t) ? 3 : /doppi|double/.test(t) ? 2 : 1;
+    return { type: 'drop', n, all: false };
+  }
+  return null;
+}
+const extraApplies = (ex, i, nSets) => !!(ex.extra && ex.extra.type && ex.extra.n > 0 && (ex.extra.all || i === nSets - 1));
+function dropPct(ex) { const m = String(ex.technique || '').match(/(\d+)\s*%/); return m ? +m[1] / 100 : null; }
 function save() {
   try { localStorage.setItem(KEY, JSON.stringify(S)); }
   catch (e) { toast('Errore nel salvataggio!'); }
@@ -64,8 +85,9 @@ function setLine(s) {
   return line;
 }
 function extrasLine(s) {
-  if (!s.extras || !s.extras.length) return '';
-  return '+ ' + s.extras.map(x => x.kg == null ? `${x.reps ?? ''}` : `${fkg(x.kg)} kg x ${x.reps ?? ''}`).join(' + ');
+  const xs = (s.extras || []).filter(x => x.reps != null);
+  if (!xs.length) return '';
+  return '+ ' + xs.map(x => x.kg == null ? `${x.reps ?? ''}` : `${fkg(x.kg)} kg x ${x.reps ?? ''}`).join(' + ');
 }
 function cellText(dayId, ex, w) {
   const l = getLog(dayId, w, false);
@@ -189,23 +211,37 @@ function vWorkout() {
     const rows = sets.map((s, i) => {
       const pv = prev[i];
       const tg = ex.sets[i] || ex.sets[ex.sets.length - 1] || {};
-      const prevTxt = pv && hasData(pv) ? `${fkg(pv.kg)} × ${pv.reps ?? ''}${pv.extras && pv.extras.length ? '  ' + extrasLine(pv) : ''}` : '';
       const tgTxt = uniq(ex.sets.map(x => x.reps)).length > 1 ? `obiettivo ${tg.reps}` : '';
-      const extras = (s.extras || []).map((x, j) => `
-        <div class="extra">
-          <span class="xmark">+</span>
-          <div class="u"><input inputmode="decimal" placeholder="=" value="${fkg(x.kg)}" data-f="xkg" data-ex="${ex.id}" data-i="${i}" data-j="${j}"><span>kg</span></div>
-          <div class="u"><input inputmode="numeric" placeholder="–" value="${x.reps ?? ''}" data-f="xreps" data-ex="${ex.id}" data-i="${i}" data-j="${j}"><span>rip</span></div>
-          <button class="ibtn" data-act="xdel" data-ex="${ex.id}" data-i="${i}" data-j="${j}" aria-label="Rimuovi">${ic('x', 16)}</button>
-          <span></span>
-        </div>`).join('');
+      // mini-serie: automatiche se l'esercizio ha drop/rest-pause, oppure aggiunte a mano con "+"
+      const auto = extraApplies(ex, i, sets.length) ? ex.extra : null;
+      s.extras = s.extras || [];
+      if (auto) while (s.extras.length < auto.n) s.extras.push({ kg: null, reps: null });
+      const pct = dropPct(ex);
+      const extras = s.extras.map((x, j) => {
+        const isAuto = !!auto && j < auto.n;
+        const rp = isAuto && auto.type === 'rp';
+        const px = pv && pv.extras ? pv.extras[j] : null;
+        let kgPh = px && px.kg != null ? fkg(px.kg) : '';
+        if (!kgPh && pct && isAuto) {
+          const base = s.kg ?? (pv ? pv.kg : null);
+          if (base) kgPh = fkg(Math.round(base * Math.pow(1 - pct, j + 1) * 2) / 2);
+        }
+        return `<div class="extra ${isAuto ? 'auto' : ''}">
+          <span class="xidx">${i + 1}.${j + 1}</span>
+          ${rp ? `<div class="rpnote">${j === 0 ? 'rest-pause' : ''}</div>`
+            : `<div class="u"><input inputmode="decimal" placeholder="${kgPh || '='}" value="${fkg(x.kg)}" data-f="xkg" data-ex="${ex.id}" data-i="${i}" data-j="${j}"><span>kg</span></div>`}
+          <div class="u"><input inputmode="numeric" placeholder="${px && px.reps != null ? px.reps : '–'}" value="${x.reps ?? ''}" data-f="xreps" data-ex="${ex.id}" data-i="${i}" data-j="${j}"><span>rip</span></div>
+          ${isAuto ? '<span></span>' : `<button class="ibtn" data-act="xdel" data-ex="${ex.id}" data-i="${i}" data-j="${j}" aria-label="Rimuovi">${ic('x', 16)}</button>`}
+          <span class="xtag">${isAuto ? (rp ? 'RP' : 'drop') : ''}</span>
+        </div>`;
+      }).join('');
       return `<div class="set ${s.done ? 'done' : ''}">
           <span class="idx">${i + 1}</span>
           <div class="u"><input inputmode="decimal" value="${fkg(s.kg)}" placeholder="${pv ? fkg(pv.kg) : ''}" data-f="kg" data-ex="${ex.id}" data-i="${i}"><span>kg</span></div>
           <div class="u"><input inputmode="numeric" value="${s.reps ?? ''}" placeholder="${pv && pv.reps != null ? pv.reps : (tg.reps || '')}" data-f="reps" data-ex="${ex.id}" data-i="${i}"><span>rip</span></div>
           <button class="ibtn" data-act="xadd" data-ex="${ex.id}" data-i="${i}" aria-label="Aggiungi drop o rest-pause">${ic('plus', 16)}</button>
           <button class="check" data-act="check" data-ex="${ex.id}" data-i="${i}" aria-label="Serie fatta">${ic('check', 20)}</button>
-          ${prevTxt || tgTxt ? `<span></span><div class="prev">${esc([tgTxt, prevTxt ? 'prima: ' + prevTxt : ''].filter(Boolean).join(' · '))}</div>` : ''}
+          ${tgTxt ? `<span></span><div class="prev">${esc(tgTxt)}</div>` : ''}
         </div>${extras}`;
     }).join('');
     const rest = (ex.sets[0] || {}).rest || 60;
@@ -322,6 +358,7 @@ function vExercise() {
   const same = uniq(ex.sets.map(s => s.reps)).length <= 1 && uniq(ex.sets.map(s => s.rest)).length <= 1 && uniq(ex.sets.map(s => s.rir)).length <= 1;
   const custom = view.custom ?? !same;
   const f = ex.sets[0] || { reps: '', rest: '', rir: '' };
+  const xt = ex.extra && ex.extra.type;
   return {
     title: ex.name || 'Esercizio', eyebrow: d.name, back: 'editor',
     html: `<section class="card">
@@ -347,6 +384,19 @@ function vExercise() {
           <div><label>Recupero (s)</label><input inputmode="numeric" value="${esc(f.rest)}" data-f="arest" placeholder="90"></div>
           <div><label>RIR</label><input value="${esc(f.rir)}" data-f="arir" placeholder="1"></div></div>`}
       <p class="muted small">Ripetizioni e RIR sono testo libero: “6-8”, “max”, “30 sec”, “AMRAP”, “0-1”…</p>
+    </section>
+    <section class="card">
+      <b>Mini-serie extra</b>
+      <div class="muted small" style="margin:2px 0 12px">Righe piccole sotto la serie per drop set o rest-pause${ex.extraManual ? '' : ' · dedotte dalla tecnica'}</div>
+      <div class="segctl">
+        <button class="${!xt ? 'on' : ''}" data-act="xtype" data-v="">Nessuna</button>
+        <button class="${xt === 'drop' ? 'on' : ''}" data-act="xtype" data-v="drop">Drop set</button>
+        <button class="${xt === 'rp' ? 'on' : ''}" data-act="xtype" data-v="rp">Rest-pause</button>
+      </div>
+      ${xt ? `<div class="row" style="margin-top:14px"><div class="grow">${xt === 'drop' ? 'Numero di drop' : 'Mini-serie di rest-pause'}
+          <div class="muted small">${xt === 'drop' ? 'con carico e ripetizioni' : 'solo ripetizioni, stesso carico'}</div></div>
+        <div class="stepper"><button data-act="xn" data-dir="-1" aria-label="Meno">${ic('minus', 16)}</button><b>${ex.extra.n}</b><button data-act="xn" data-dir="1" aria-label="Più">${ic('plus', 16)}</button></div></div>
+        <label class="switch"><input type="checkbox" data-f="xall" ${ex.extra.all ? 'checked' : ''}><span>Su tutte le serie<br><small class="muted">altrimenti solo sull'ultima</small></span></label>` : ''}
     </section>
     <button class="linkdanger" data-act="exdel">${ic('trash', 14)} Elimina esercizio</button>`
   };
@@ -431,7 +481,13 @@ app.addEventListener('input', e => {
     if (f === 'kg') sets[i].kg = num(t.value);
     if (f === 'reps') sets[i].reps = num(t.value);
     if (f === 'xkg') sets[i].extras[+t.dataset.j].kg = num(t.value);
-    if (f === 'xreps') sets[i].extras[+t.dataset.j].reps = num(t.value);
+    if (f === 'xreps') {
+      const x = sets[i].extras[+t.dataset.j];
+      x.reps = num(t.value);
+      // se il carico del drop è vuoto, usa quello suggerito
+      const kin = t.closest('.extra').querySelector('[data-f=xkg]');
+      if (x.kg == null && kin && kin.placeholder && kin.placeholder !== '=') { x.kg = num(kin.placeholder); kin.value = kin.placeholder; }
+    }
     if (f === 'note') { if (t.value.trim()) log.notes[ex.id] = t.value; else delete log.notes[ex.id]; }
   } else if (view.name === 'editor') {
     if (f === 'pname') p.name = t.value;
@@ -442,7 +498,7 @@ app.addEventListener('input', e => {
     const ex = exById(dayById(view.dayId), view.exId), i = +t.dataset.i;
     if (f === 'exname') ex.name = t.value;
     if (f === 'exnote') ex.note = t.value;
-    if (f === 'extech') ex.technique = t.value;
+    if (f === 'extech') { ex.technique = t.value; if (!ex.extraManual) ex.extra = guessExtra(t.value); }
     if (f === 'areps') ex.sets.forEach(s => s.reps = t.value);
     if (f === 'arest') ex.sets.forEach(s => s.rest = t.value.replace(/\D/g, ''));
     if (f === 'arir') ex.sets.forEach(s => s.rir = t.value);
@@ -455,6 +511,8 @@ app.addEventListener('input', e => {
 app.addEventListener('change', e => {
   const t = e.target, f = t.dataset.f;
   if (f === 'custom') { view.custom = t.checked; render(); }
+  if (f === 'extech' && view.name === 'exercise') render();
+  if (f === 'xall') { const ex = exById(dayById(view.dayId), view.exId); ex.extra.all = t.checked; ex.extraManual = true; save(); }
   if (f === 'snd') { S.settings.sound = t.checked; save(); }
   if (f === 'vib') { S.settings.vibrate = t.checked; save(); }
   if (t.id === 'restoreFile' && t.files[0]) restore(t.files[0]);
@@ -530,6 +588,15 @@ document.addEventListener('click', e => {
     }
     case 'exedit': return go({ name: 'exercise', dayId: d.id, exId: b.dataset.ex });
     case 'exmove': move(d.exercises, exById(d, b.dataset.ex), +b.dataset.dir); save(); return render();
+    case 'xtype': {
+      const ex = exById(d, view.exId), v = b.dataset.v;
+      ex.extra = v ? { type: v, n: (ex.extra && ex.extra.n) || (v === 'rp' ? 2 : 1), all: !!(ex.extra && ex.extra.all) } : null;
+      ex.extraManual = true; save(); return render();
+    }
+    case 'xn': {
+      const ex = exById(d, view.exId);
+      ex.extra.n = Math.min(6, Math.max(1, ex.extra.n + +b.dataset.dir)); ex.extraManual = true; save(); return render();
+    }
     case 'exsets': {
       const ex = exById(d, view.exId);
       if (+b.dataset.dir > 0) ex.sets.push({ ...(ex.sets[ex.sets.length - 1] || { reps: '8-10', rest: '90', rir: '1' }) });

@@ -2,9 +2,13 @@
 'use strict';
 
 const KEY = 'gymlog.v1';
-const VERSION = '2.0 · rosso più deciso';
+const VERSION = '2.1 · supporto iPhone';
 // dentro l'app Android esiste window.AndroidApp: timer, notifiche, file e stampa li gestisce Android
 const NATIVE = window.AndroidApp || null;
+// iPhone / iPad: l'app va aggiunta alla schermata Home da Safari; in background iOS la sospende subito
+const IOS = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const STANDALONE = navigator.standalone === true || (window.matchMedia && matchMedia('(display-mode: standalone)').matches);
+const lsGet = k => { try { return localStorage.getItem(k); } catch (e) { return null; } };
 const uid = () => Math.random().toString(36).slice(2, 10);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const num = v => { if (v === '' || v == null) return null; const n = parseFloat(String(v).replace(',', '.')); return isNaN(n) ? null : n; };
@@ -186,7 +190,11 @@ function vHome() {
   return {
     title: p.name, eyebrow: 'La mia scheda',
     actions: `<button class="hbtn" data-go="settings" aria-label="Impostazioni">${ic('settings', 20)}</button>`,
-    html: `${hero}
+    html: `${IOS && !STANDALONE && !lsGet('gymlog.iosHint') ? `<section class="card ioshint">
+        <div class="eyebrow">${ic('share', 13)} Installa su iPhone</div>
+        <p class="muted small">In Safari tocca <b>Condividi</b> (il quadrato con la freccia in basso) e poi <b>Aggiungi alla schermata Home</b>. Così si apre a schermo intero, funziona offline e può mandarti le notifiche del timer.</p>
+        <button class="soft small" data-act="ioshint">Ho capito</button>
+      </section>` : ''}${hero}
       <div class="section">Allenamenti</div>
       <div class="list">${days || '<div class="empty">Nessun allenamento. Aggiungine uno da “Modifica scheda”.</div>'}</div>
       <div class="tiles">
@@ -452,10 +460,11 @@ function vSettings() {
       <section class="card">
         <label class="switch"><input type="checkbox" data-f="snd" ${S.settings.sound ? 'checked' : ''}><span>Suono a fine recupero</span></label>
         <label class="switch"><input type="checkbox" data-f="vib" ${S.settings.vibrate ? 'checked' : ''}><span>Vibrazione a fine recupero</span></label>
+        ${IOS ? `<p class="muted small" style="margin:4px 0 0">${ic('timer', 14)} Su iPhone, quando esci dall'app, iOS la mette in pausa: la notifica mostra a che ora finisce il recupero, ma il suono di fine arriva solo con l'app aperta: durante l'allenamento tienila aperta davanti.${!STANDALONE ? ' Le notifiche funzionano solo dopo averla aggiunta alla schermata Home.' : ''}</p>` : ''}
         <div class="stack">
           ${perm === 'granted' ? `<div class="muted small">${ic('bell', 14)} Notifiche attive: quando esci dall'app vedi il timer nella tendina.</div>`
             : perm === 'denied' && NATIVE ? `<button class="soft" data-act="notifyperm">${ic('bell', 16)} Notifiche bloccate · apri impostazioni</button>`
-            : perm === 'denied' ? `<div class="muted small">${ic('bell', 14)} Notifiche bloccate: riattivale dalle impostazioni del sito in Chrome.</div>`
+            : perm === 'denied' ? `<div class="muted small">${ic('bell', 14)} Notifiche bloccate: riattivale ${IOS ? 'da Impostazioni iPhone → Notifiche → Scheda' : 'dalle impostazioni del sito in Chrome'}.</div>`
             : perm === 'default' ? `<button class="soft" data-act="notifyperm">${ic('bell', 16)} Attiva notifiche del timer</button>` : ''}
           <button class="soft" data-act="testtimer">${ic('timer', 16)} Prova timer (10 secondi)</button>
         </div>
@@ -634,6 +643,7 @@ document.addEventListener('click', e => {
       return;
     case 'testtimer': toast('Esci dall\'app per vedere la notifica'); return startTimer(10, 'Prova timer');
     case 'notifyperm': return askNotify();
+    case 'ioshint': try { localStorage.setItem('gymlog.iosHint', '1'); } catch (e) { } return render();
     case 'backup': {
       const blob = new Blob([JSON.stringify(S, null, 1)], { type: 'application/json' });
       return download(blob, `backup-palestra-${today()}.json`);
@@ -853,8 +863,9 @@ async function showRestNotif() {
   const at = new Date(T.end).toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
   try {
     const r = await navigator.serviceWorker.ready;
-    await r.showNotification(`⏱ Recupero ${mmss(s)}`, {
-      tag: 'rest', body: `${T.label} · finisce alle ${at}`, icon: 'icon-192.png',
+    // su iPhone la notifica non si aggiorna (iOS sospende l'app): mostro l'orario di fine, che resta giusto
+    await r.showNotification(IOS ? `⏱ Recupero fino alle ${at}` : `⏱ Recupero ${mmss(s)}`, {
+      tag: 'rest', body: IOS ? `${T.label} · ${mmss(s)} di recupero` : `${T.label} · finisce alle ${at}`, icon: 'icon-192.png',
       silent: true, renotify: false, requireInteraction: true,
       actions: [{ action: 'add15', title: '+15 s' }, { action: 'skip', title: 'Salta' }]
     });

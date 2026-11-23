@@ -8,6 +8,12 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icon-192.png">
 <link rel="apple-touch-icon" href="icon-192.png">
+<!-- iPhone: si apre a schermo intero dalla schermata Home, barra di stato scura -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Scheda">
+<meta name="format-detection" content="telephone=no">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -76,6 +82,9 @@ main{padding:4px 16px 16px;max-width:720px;margin:0 auto}
 
 /* cards */
 .card,.excard{background:var(--s1);border-radius:var(--r);padding:16px;margin-bottom:12px}
+.ioshint{border:1px solid var(--accent-line);margin-top:6px}
+.ioshint .eyebrow{color:var(--accent);display:flex;align-items:center;gap:6px}
+.ioshint p{margin:8px 0 12px;line-height:1.5}
 .stack{display:flex;flex-direction:column;gap:8px;margin-top:12px}
 .stack button{justify-content:flex-start}
 

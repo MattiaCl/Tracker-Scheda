@@ -5,14 +5,22 @@ import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
+import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.graphics.drawable.Icon;
 import android.media.AudioAttributes;
+import android.media.Ringtone;
 import android.media.RingtoneManager;
+import android.net.Uri;
 import android.os.Build;
+import android.os.Handler;
+import android.os.Looper;
 import android.os.SystemClock;
+import android.os.VibrationAttributes;
+import android.os.VibrationEffect;
+import android.os.Vibrator;
 import android.widget.RemoteViews;
 
 import org.json.JSONObject;
@@ -32,6 +40,7 @@ final class TimerCore {
     static final String ACT_SKIP = "it.scheda.palestra.TIMER_SKIP";
 
     private static final String CH_RUN = "recupero_in_corso";
+    private static final String CH_END = "fine_recupero_v2";
     private static final int ID_RUN = 1;
     private static final int ID_END = 2;
     private static final String PREF = "timer";
@@ -48,35 +57,18 @@ final class TimerCore {
         run.enableVibration(false);
         run.setShowBadge(false);
 
-        AudioAttributes aa = new AudioAttributes.Builder()
-                .setUsage(AudioAttributes.USAGE_NOTIFICATION)
-                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                .build();
-        long[] pattern = {0, 400, 150, 400, 150, 700};
+        // la notifica di fine è solo visiva: suono e vibrazione li fa l'app come una sveglia (vedi alert),
+        // così si sentono anche con il telefono in silenzioso
+        NotificationChannel end = new NotificationChannel(CH_END, "Fine recupero", NotificationManager.IMPORTANCE_HIGH);
+        end.setDescription("Avviso a fine recupero (il suono usa il volume della sveglia)");
+        end.setSound(null, null);
+        end.enableVibration(false);
 
-        NotificationChannel sv = new NotificationChannel(endChannel(true, true), "Fine recupero", NotificationManager.IMPORTANCE_HIGH);
-        sv.setSound(RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION), aa);
-        sv.enableVibration(true);
-        sv.setVibrationPattern(pattern);
-
-        NotificationChannel s = new NotificationChannel(endChannel(true, false), "Fine recupero (solo suono)", NotificationManager.IMPORTANCE_HIGH);
-        s.setSound(RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION), aa);
-        s.enableVibration(false);
-
-        NotificationChannel v = new NotificationChannel(endChannel(false, true), "Fine recupero (solo vibrazione)", NotificationManager.IMPORTANCE_HIGH);
-        v.setSound(null, null);
-        v.enableVibration(true);
-        v.setVibrationPattern(pattern);
-
-        NotificationChannel m = new NotificationChannel(endChannel(false, false), "Fine recupero (silenziosa)", NotificationManager.IMPORTANCE_HIGH);
-        m.setSound(null, null);
-        m.enableVibration(false);
-
-        nm.createNotificationChannels(Arrays.asList(run, sv, s, v, m));
-    }
-
-    private static String endChannel(boolean sound, boolean vibrate) {
-        return "fine_recupero_" + (sound ? "s" : "") + (vibrate ? "v" : "") + "_";
+        nm.createNotificationChannels(Arrays.asList(run, end));
+        // canali della versione precedente (suono come notifica, zittito dal silenzioso)
+        for (String old : new String[]{"fine_recupero_sv_", "fine_recupero_s_", "fine_recupero_v_", "fine_recupero__"}) {
+            try { nm.deleteNotificationChannel(old); } catch (Exception ignored) { }
+        }
     }
 
     /* ---------- stato salvato ---------- */
@@ -133,9 +125,9 @@ final class TimerCore {
     }
 
     /** Chiamato dalla sveglia a fine recupero. */
-    static void finished(Context c) {
+    static void finished(Context c, BroadcastReceiver.PendingResult pr) {
         SharedPreferences p = prefs(c);
-        if (p.getLong("end", 0) <= 0) return;
+        if (p.getLong("end", 0) <= 0) { pr.finish(); return; }
         String label = p.getString("label", "");
         boolean sound = p.getBoolean("sound", true);
         boolean vibrate = p.getBoolean("vibrate", true);
@@ -144,9 +136,9 @@ final class TimerCore {
         NotificationManager nm = c.getSystemService(NotificationManager.class);
         nm.cancel(ID_RUN);
         // se l'app è aperta davanti, suono e vibrazione li fa già lei
-        if (MainActivity.isVisible()) return;
+        if (MainActivity.isVisible()) { pr.finish(); return; }
 
-        Notification n = new Notification.Builder(c, endChannel(sound, vibrate))
+        Notification n = new Notification.Builder(c, CH_END)
                 .setSmallIcon(R.drawable.ic_stat_timer)
                 .setColor(0xFFEF5350)
                 .setContentTitle("Recupero finito 💪")
@@ -156,6 +148,51 @@ final class TimerCore {
                 .setContentIntent(openApp(c))
                 .build();
         nm.notify(ID_END, n);
+        alert(c, sound, vibrate, pr);
+    }
+
+    /**
+     * Suono e vibrazione di fine recupero come una sveglia (USAGE_ALARM):
+     * si sentono anche con il telefono in silenzioso, al volume della sveglia.
+     */
+    private static void alert(Context c, boolean sound, boolean vibrate, BroadcastReceiver.PendingResult pr) {
+        Ringtone ring = null;
+        if (sound) {
+            try {
+                Uri u = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION);
+                if (u == null) u = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM);
+                ring = RingtoneManager.getRingtone(c, u);
+                if (ring != null) {
+                    ring.setAudioAttributes(new AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_ALARM)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                            .build());
+                    ring.setLooping(true);
+                    ring.play();
+                }
+            } catch (Exception e) {
+                ring = null;
+            }
+        }
+        if (vibrate) {
+            try {
+                Vibrator v = c.getSystemService(Vibrator.class);
+                VibrationEffect fx = VibrationEffect.createWaveform(new long[]{0, 400, 150, 400, 150, 700}, -1);
+                if (Build.VERSION.SDK_INT >= 33) {
+                    v.vibrate(fx, VibrationAttributes.createForUsage(VibrationAttributes.USAGE_ALARM));
+                } else {
+                    v.vibrate(fx, new AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ALARM).build());
+                }
+            } catch (Exception ignored) { }
+        }
+        // il suono gira per qualche secondo (2-3 ripetizioni), poi si ferma da solo
+        final Ringtone r = ring;
+        new Handler(Looper.getMainLooper()).postDelayed(() -> {
+            if (r != null) {
+                try { r.stop(); } catch (Exception ignored) { }
+            }
+            pr.finish();
+        }, r != null ? 4000 : 200);
     }
 
     /* ---------- notifica con il conto alla rovescia ---------- */

@@ -2,7 +2,7 @@
 'use strict';
 
 const KEY = 'gymlog.v1';
-const VERSION = '2.1 · supporto iPhone';
+const VERSION = '2.4 · protezione dei dati';
 // dentro l'app Android esiste window.AndroidApp: timer, notifiche, file e stampa li gestisce Android
 const NATIVE = window.AndroidApp || null;
 // iPhone / iPad: l'app va aggiunta alla schermata Home da Safari; in background iOS la sospende subito
@@ -19,14 +19,40 @@ let S;            // stato persistente
 let view = { name: 'home' };
 
 /* ---------- stato ---------- */
+const validData = d => !!(d && Array.isArray(d.programs) && d.programs.length);
+const countLogs = d => (d.programs || []).reduce((a, p) => a + Object.values(p.logs || {}).reduce((b, w) => b + Object.keys(w || {}).length, 0), 0);
+let recovered = null;   // da dove sono stati recuperati i dati all'avvio (per avvisare)
+// true se l'app è ripartita da zero: finché non importi un backup o segni una serie,
+// il backup automatico in Download non viene sovrascritto (così non perdi quello vecchio)
+let freshSeed = false;
 function load() {
-  try { S = JSON.parse(localStorage.getItem(KEY)); } catch (e) { S = null; }
-  if (!S || !Array.isArray(S.programs)) {
-    S = { activeId: null, programs: [], settings: { sound: true, vibrate: true } };
-    const p = seedProgram();
-    S.programs.push(p);
-    S.activeId = p.id;
+  let raw = null;
+  try { raw = localStorage.getItem(KEY); } catch (e) { }
+  try { S = JSON.parse(raw); } catch (e) {
+    S = null;
+    // dati illeggibili: li conservo a parte invece di sovrascriverli
+    if (raw) try { localStorage.setItem(KEY + '.illeggibile', raw); } catch (e2) { }
+  }
+  if (!validData(S)) {
+    // memoria vuota: prima di ripartire da zero provo le copie di sicurezza
+    S = null;
+    if (NATIVE && NATIVE.loadData) {
+      try { const d = JSON.parse(NATIVE.loadData() || 'null'); if (validData(d)) { S = d; recovered = 'copia di sicurezza dell\'app'; } } catch (e) { }
+    }
+    if (!S) {
+      try { const d = JSON.parse(lsGet(KEY + '.copia') || 'null'); if (validData(d)) { S = d; recovered = 'copia del giorno prima'; } } catch (e) { }
+    }
+    if (!S) {
+      S = { activeId: null, programs: [], settings: { sound: true, vibrate: true } };
+      const p = seedProgram();
+      S.programs.push(p);
+      S.activeId = p.id;
+      freshSeed = true;
+    }
     save();
+  } else if (lsGet(KEY + '.copiaData') !== today()) {
+    // una volta al giorno: copia dei dati com'erano all'apertura (protegge da cancellazioni per errore)
+    try { localStorage.setItem(KEY + '.copia', raw); localStorage.setItem(KEY + '.copiaData', today()); } catch (e) { }
   }
   S.settings = Object.assign({ sound: true, vibrate: true }, S.settings || {});
   // migrazione: deduce le serie extra dalla tecnica per gli esercizi che non le hanno ancora
@@ -54,7 +80,17 @@ function dropPct(ex) { const m = String(ex.technique || '').match(/(\d+)\s*%/); 
 function save() {
   try { localStorage.setItem(KEY, JSON.stringify(S)); }
   catch (e) { toast('Errore nel salvataggio!'); }
+  nativePersist(false);
 }
+// app Android: copia dei dati anche in un file dell'app e nei backup automatici in Download
+let persistT = null;
+function nativePersist(now) {
+  if (!NATIVE || !NATIVE.saveData) return;
+  clearTimeout(persistT);
+  const run = () => { try { NATIVE.saveData(JSON.stringify(S), !freshSeed); } catch (e) { } };
+  if (now) run(); else persistT = setTimeout(run, 800);
+}
+const autoBackup = () => !!(NATIVE && NATIVE.saveData);
 const prog = () => S.programs.find(p => p.id === S.activeId) || S.programs[0];
 const dayById = id => prog().days.find(d => d.id === id);
 const exById = (day, id) => day.exercises.find(e => e.id === id);
@@ -167,6 +203,16 @@ function render() {
 const weekBar = (dayId, weeks) => `<div class="wbar">${Array.from({ length: weeks }, (_, i) =>
   `<span class="${weekDone(dayId, i + 1) ? 'on' : ''}"></span>`).join('')}</div>`;
 
+// promemoria backup (non serve nell'app Android, che fa i backup da sola)
+function backupReminder() {
+  if (autoBackup() || !countLogs(S)) return '';
+  const last = +(lsGet('gymlog.lastBackup') || 0);
+  const days = last ? Math.floor((Date.now() - last) / 86400000) : null;
+  if (days !== null && days < 7) return '';
+  // piccolo pulsante in alto, accanto alle impostazioni
+  const title = days === null ? 'Non hai ancora fatto un backup' : `Ultimo backup ${days} giorni fa`;
+  return `<button class="bkbtn" data-act="backup" title="${title} · tocca per esportarlo" aria-label="${title}: esporta backup">${ic('download', 13)} Backup</button>`;
+}
 function vHome() {
   const p = prog();
   // allenamento suggerito: il primo con meno settimane completate
@@ -189,7 +235,7 @@ function vHome() {
     </button>`).join('');
   return {
     title: p.name, eyebrow: 'La mia scheda',
-    actions: `<button class="hbtn" data-go="settings" aria-label="Impostazioni">${ic('settings', 20)}</button>`,
+    actions: `${backupReminder()}<button class="hbtn" data-go="settings" aria-label="Impostazioni">${ic('settings', 20)}</button>`,
     html: `${IOS && !STANDALONE && !lsGet('gymlog.iosHint') ? `<section class="card ioshint">
         <div class="eyebrow">${ic('share', 13)} Installa su iPhone</div>
         <p class="muted small">In Safari tocca <b>Condividi</b> (il quadrato con la freccia in basso) e poi <b>Aggiungi alla schermata Home</b>. Così si apre a schermo intero, funziona offline e può mandarti le notifiche del timer.</p>
@@ -209,14 +255,15 @@ function vWorkout() {
   if (!d) return vHome();
   const w = view.week;
   const log = getLog(d.id, w, true);
-  const prevLog = w > 1 ? getLog(d.id, w - 1, false) : null;
   const one = S.settings.oneByOne !== false;
   const weeks = Array.from({ length: p.weeks }, (_, i) =>
     `<button class="${i + 1 === w ? 'on' : ''} ${weekDone(d.id, i + 1) ? 'has' : ''}" data-act="week" data-week="${i + 1}">S${i + 1}</button>`).join('');
 
   const card = ex => {
     const sets = setsFor(log, ex);
-    const prev = prevLog && prevLog.ex[ex.id] ? prevLog.ex[ex.id] : [];
+    // carichi dell'ultima volta che l'esercizio è stato fatto (anche se hai saltato settimane);
+    // se in questa scheda non c'è, quelli dello stesso esercizio nella scheda precedente
+    const prev = lastDone(p, d.id, ex.id, w) || lastByName(ex.name, p);
     const t = targetSummary(ex);
     const rows = sets.map((s, i) => {
       const pv = prev[i];
@@ -451,6 +498,9 @@ function vSettings() {
           <div class="muted small">${x.days.length} allenamenti · ${x.weeks} settimane</div></div>
           ${x.id !== p.id ? `<button class="soft small" data-act="pactivate" data-p="${x.id}">Usa</button>` : ''}</div>`).join('')}
         <div class="stack">
+          ${view.paste ? `<textarea id="pasteBox" class="pastebox" placeholder="Incolla qui la scheda copiata dalla chat del personal trainer"></textarea>
+            <div class="row2"><button class="soft" data-act="pasteclose">Annulla</button><button class="primary" data-act="pasteadd">${ic('plus', 16)} Aggiungi scheda</button></div>`
+            : `<button class="soft" data-act="pasteopen">${ic('edit', 16)} Incolla scheda dal personal trainer</button>`}
           <button class="soft" data-act="pclone">${ic('repeat', 16)} Nuovo ciclo · stessa scheda, registro vuoto</button>
           <button class="soft" data-act="pnew">${ic('plus', 16)} Scheda vuota</button>
         </div>
@@ -471,7 +521,8 @@ function vSettings() {
       </section>
       <div class="section">Backup e PC</div>
       <section class="card">
-        <p class="muted small" style="margin-top:0">Salva un file con tutti i dati per spostarli sul PC o su un nuovo telefono.</p>
+        ${autoBackup() ? `<p class="small" style="margin-top:0;color:var(--text)">${ic('check', 14)} Backup automatico attivo: a ogni salvataggio i dati vengono copiati in <b>Download/Scheda/backup-automatico.json</b> (sempre lo stesso file, aggiornato). Resta anche se disinstalli l'app: per recuperarlo usa Importa backup.</p>` : ''}
+        <p class="muted small" style="margin-top:0">Salva un file con tutti i dati per spostarli sul PC o su un nuovo telefono.${!autoBackup() ? ' Fallo almeno una volta a settimana: se il telefono cancella i dati dell\'app, il backup è l\'unico modo per recuperarli.' : ''}</p>
         <div class="stack">
           <button class="soft" data-act="backup">${ic('download', 16)} Esporta backup</button>
           <button class="soft" data-act="restore">${ic('upload', 16)} Importa backup</button>
@@ -562,7 +613,7 @@ document.addEventListener('click', e => {
         if (s.kg == null && kgIn.placeholder) s.kg = num(kgIn.placeholder);
         if (s.reps == null && rIn.placeholder && /^\d+$/.test(rIn.placeholder)) s.reps = num(rIn.placeholder);
         if (s.reps == null) { toast('Inserisci le ripetizioni'); rIn.focus(); return; }
-        s.done = true;
+        s.done = true; freshSeed = false;
         if (!log.date) log.date = today();
         const tg = ex.sets[i] || ex.sets[ex.sets.length - 1] || {};
         const rest = parseInt(tg.rest);
@@ -643,10 +694,23 @@ document.addEventListener('click', e => {
       return;
     case 'testtimer': toast('Esci dall\'app per vedere la notifica'); return startTimer(10, 'Prova timer');
     case 'notifyperm': return askNotify();
+    case 'pasteopen': view.paste = true; render(); { const tb = document.getElementById('pasteBox'); if (tb) tb.focus(); } return;
+    case 'pasteclose': view.paste = false; return render();
+    case 'pasteadd': {
+      const t = document.getElementById('pasteBox').value;
+      if (!t.trim()) { toast('Incolla prima la scheda'); return; }
+      let ok = false;
+      try { JSON.parse(extractJson(t)); ok = true; } catch (e) { }
+      if (!ok) { toast('Testo non valido: copia tutto il blocco della scheda'); return; }
+      return restoreText(t);
+    }
     case 'ioshint': try { localStorage.setItem('gymlog.iosHint', '1'); } catch (e) { } return render();
     case 'backup': {
       const blob = new Blob([JSON.stringify(S, null, 1)], { type: 'application/json' });
-      return download(blob, `backup-palestra-${today()}.json`);
+      try { localStorage.setItem('gymlog.lastBackup', String(Date.now())); } catch (e) { }
+      download(blob, `backup-palestra-${today()}.json`);
+      if (view.name === 'home') render();
+      return;
     }
     case 'restore':
       if (NATIVE && NATIVE.pickBackup) return NATIVE.pickBackup();
@@ -680,11 +744,101 @@ function restore(file) {
 }
 function restoreText(t) {
   let data = null;
-  try { data = JSON.parse(t); } catch (e) { }
+  try { data = JSON.parse(extractJson(t)); } catch (e) { }
+  // scheda creata dal personal trainer: si aggiunge, non sostituisce niente
+  if (data && !Array.isArray(data.programs) && (Array.isArray(data.allenamenti) || data.tipo === 'scheda-palestra')) return importScheda(data);
   if (!data || !Array.isArray(data.programs) || !data.programs.length) { toast('File di backup non valido'); return; }
   const n = data.programs.reduce((a, p) => a + Object.values(p.logs || {}).reduce((b, w) => b + Object.keys(w).length, 0), 0);
   if (!confirm(`Backup con ${data.programs.length} ${data.programs.length > 1 ? 'schede' : 'scheda'} e ${n} allenamenti registrati.\nSostituire tutti i dati attuali?`)) return;
-  S = data; save(); load(); toast('Backup importato'); go({ name: 'home' });
+  S = data; freshSeed = false; save(); load(); toast('Backup importato'); go({ name: 'home' });
+  return true;
+}
+// prende solo la parte { ... } (es. testo copiato dalla chat con ```json intorno)
+function extractJson(t) {
+  t = String(t || '').trim();
+  const a = t.indexOf('{'), b = t.lastIndexOf('}');
+  return a >= 0 && b > a ? t.slice(a, b + 1) : t;
+}
+
+/* ---------- scheda dal personal trainer (formato semplice, vedi ISTRUZIONI-PERSONAL-TRAINER.md) ---------- */
+// recupero in secondi: 90, "90", "90s", "90\"", "2'", "2 min", "1'30"
+function parseRest(v) {
+  if (v == null || v === '') return '';
+  if (typeof v === 'number') return String(Math.round(v));
+  const s = String(v).toLowerCase().replace(',', '.').trim();
+  let m = s.match(/^(\d+(?:\.\d+)?)\s*(?:'|’|min\w*|m)\s*(?:(\d+)\s*(?:"|”|''|s\w*)?)?$/);
+  if (m) return String(Math.round(parseFloat(m[1]) * 60 + (m[2] ? +m[2] : 0)));
+  m = s.match(/\d+/);
+  return m ? m[0] : '';
+}
+function schedaToProgram(o) {
+  const days = o.allenamenti;
+  if (!Array.isArray(days) || !days.length) throw new Error('nessun allenamento');
+  const str = v => v == null ? '' : String(v);
+  const clamp = (v, lo, hi, def) => Math.max(lo, Math.min(hi, parseInt(v) || def));
+  return {
+    id: uid(), name: str(o.nome || 'Nuova scheda'), weeks: clamp(o.settimane, 1, 12, 4), logs: {},
+    days: days.map((d, i) => ({
+      id: uid(), name: str(d.nome || `Allenamento ${i + 1}`),
+      warmup: Array.isArray(d.riscaldamento) ? d.riscaldamento.join(' · ') : str(d.riscaldamento),
+      exercises: (d.esercizi || []).map(e => {
+        const base = { reps: str(e.ripetizioni ?? ''), rest: parseRest(e.recupero), rir: str(e.rir ?? '') };
+        const sets = Array.isArray(e.serie)
+          ? e.serie.map(s => ({
+              reps: str(s.ripetizioni ?? base.reps),
+              rest: s.recupero != null ? parseRest(s.recupero) : base.rest,
+              rir: str(s.rir ?? base.rir) }))
+          : Array.from({ length: clamp(e.serie, 1, 10, 3) }, () => ({ ...base }));
+        if (!sets.length) sets.push({ ...base });
+        const technique = str(e.tecnica);
+        const ex = { id: uid(), name: str(e.nome || 'Esercizio'), note: str(e.note), technique, sets, extra: guessExtra(technique) };
+        const ms = e.mini_serie;
+        if (ms && typeof ms === 'object') {
+          const t = /rest|rp|myo/i.test(ms.tipo) ? 'rp' : /drop/i.test(ms.tipo) ? 'drop' : null;
+          ex.extra = t ? { type: t, n: clamp(ms.numero, 1, 6, 1), all: !!ms.tutte_le_serie } : null;
+          ex.extraManual = true;
+        }
+        return ex;
+      })
+    }))
+  };
+}
+function importScheda(o) {
+  let p;
+  try { p = schedaToProgram(o); } catch (e) { toast('Scheda non valida: ' + e.message); return false; }
+  const nEx = p.days.reduce((a, d) => a + d.exercises.length, 0);
+  if (!confirm(`Aggiungere la scheda "${p.name}"?\n${p.days.length} allenamenti · ${nEx} esercizi · ${p.weeks} settimane.\n\nDiventa la scheda attiva. Le schede precedenti con tutti i carichi restano salvate (Impostazioni → Schede).`)) return false;
+  S.programs.unshift(p); S.activeId = p.id; freshSeed = false; save();
+  toast('Scheda aggiunta'); go({ name: 'home' });
+  return true;
+}
+// ultimi carichi di un esercizio con lo stesso nome in una scheda precedente
+// ultima settimana prima di "week" in cui l'esercizio ha dati registrati
+function lastDone(p, dayId, exId, week) {
+  const L = (p.logs || {})[dayId] || {};
+  for (let k = week - 1; k >= 1; k--) {
+    const a = L[k] && L[k].ex && L[k].ex[exId];
+    if (a && a.some(hasData)) return a;
+  }
+  return null;
+}
+function lastByName(name, cur) {
+  const key = String(name || '').trim().toLowerCase();
+  if (!key) return [];
+  for (const p of S.programs) {
+    if (p === cur) continue;
+    let best = null, bw = 0;
+    p.days.forEach(d => d.exercises.forEach(e => {
+      if (String(e.name).trim().toLowerCase() !== key) return;
+      const L = (p.logs || {})[d.id] || {};
+      Object.keys(L).forEach(w => {
+        const a = L[w] && L[w].ex && L[w].ex[e.id];
+        if (a && a.some(hasData) && +w > bw) { bw = +w; best = a; }
+      });
+    }));
+    if (best) return best;
+  }
+  return [];
 }
 // app Android: il file lo legge Android e lo passa qui
 window.nativeRestore = restoreText;
@@ -703,10 +857,10 @@ function download(blob, name) {
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(a.href), 5000);
 }
-function toast(msg) {
+function toast(msg, ms = 2200) {
   const t = document.getElementById('toast');
   t.textContent = msg; t.classList.add('show');
-  clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.remove('show'), 2200);
+  clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.remove('show'), ms);
 }
 
 /* ---------- export Excel ---------- */
@@ -905,7 +1059,7 @@ function askNotify() {
   if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission().then(() => { if (view.name === 'settings') render(); }).catch(() => {});
 }
 document.addEventListener('visibilitychange', () => {
-  if (NATIVE) { if (!document.hidden) { nativeSync(); manageWakeLock(); } return; }
+  if (NATIVE) { if (!document.hidden) { nativeSync(); manageWakeLock(); } else nativePersist(true); return; }
   if (document.hidden) { if (!T.fired) startNotifLoop(); }
   else { stopNotifLoop(); closeNotifs('rest-end'); tick(); manageWakeLock(); }
 });
@@ -931,6 +1085,7 @@ try {
 } catch (e) { }
 nativeSync();
 render();
+if (recovered) setTimeout(() => toast(`Dati recuperati dalla ${recovered}`, 5000), 400);
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
   navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(r => r.update()).catch(() => {});
   // quando arriva una versione nuova del service worker, ricarica una volta

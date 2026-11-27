@@ -83,9 +83,12 @@ main{padding:4px 16px 16px;max-width:720px;margin:0 auto}
 /* cards */
 .card,.excard{background:var(--s1);border-radius:var(--r);padding:16px;margin-bottom:12px}
 .ioshint{border:1px solid var(--accent-line);margin-top:6px}
+.bkbtn{display:inline-flex;align-items:center;gap:4px;padding:5px 9px;border-radius:999px;background:transparent;border:1px solid rgba(240,178,92,.4);color:var(--warn);font-size:12px;font-weight:600;white-space:nowrap;flex:none}
 .ioshint .eyebrow{color:var(--accent);display:flex;align-items:center;gap:6px}
 .ioshint p{margin:8px 0 12px;line-height:1.5}
 .stack{display:flex;flex-direction:column;gap:8px;margin-top:12px}
+.row2{display:grid;grid-template-columns:1fr 1.6fr;gap:8px}
+.pastebox{min-height:160px;font-size:13px;font-family:ui-monospace,Menlo,Consolas,monospace}
 .stack button{justify-content:flex-start}
 
 /* workout */
@@ -204,7 +207,7 @@ table.rep td.warm{font-size:10px}
 #timer.end #ttime{color:var(--accent)}
 @keyframes glow{50%{box-shadow:0 0 0 6px var(--accent-soft),0 12px 40px rgba(0,0,0,.5)}}
 
-#toast{position:fixed;left:50%;bottom:calc(100px + env(safe-area-inset-bottom));transform:translate(-50%,10px);background:var(--text);color:var(--bg);padding:10px 16px;border-radius:12px;font-size:14px;font-weight:500;z-index:20;opacity:0;transition:opacity .2s,transform .2s;pointer-events:none;white-space:nowrap}
+#toast{position:fixed;left:50%;bottom:calc(100px + env(safe-area-inset-bottom));transform:translate(-50%,10px);background:var(--text);color:var(--bg);padding:10px 16px;border-radius:12px;font-size:14px;font-weight:500;z-index:20;opacity:0;transition:opacity .2s,transform .2s;pointer-events:none;width:max-content;max-width:calc(100vw - 32px);text-align:center}
 #toast.show{opacity:1;transform:translate(-50%,0)}
 
 @media print{

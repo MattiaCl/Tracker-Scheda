@@ -9,9 +9,14 @@ public class TimerReceiver extends BroadcastReceiver {
     @Override
     public void onReceive(Context c, Intent intent) {
         String a = intent.getAction();
-        if (TimerCore.ACT_END.equals(a)) TimerCore.finished(c);
-        else if (TimerCore.ACT_ADD.equals(a)) TimerCore.addSeconds(c, 15);
-        else if (TimerCore.ACT_SKIP.equals(a)) TimerCore.stop(c);
+        if (TimerCore.ACT_END.equals(a)) {
+            // goAsync: il ricevitore resta vivo qualche secondo mentre suona
+            TimerCore.finished(c, goAsync());
+        } else if (TimerCore.ACT_ADD.equals(a)) {
+            TimerCore.addSeconds(c, 15);
+        } else if (TimerCore.ACT_SKIP.equals(a)) {
+            TimerCore.stop(c);
+        }
         MainActivity.syncWeb();
     }
 }

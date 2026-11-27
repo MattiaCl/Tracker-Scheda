@@ -359,6 +359,12 @@ public class MainActivity extends Activity {
         }
 
         @JavascriptInterface
-        public String version() { return "1.0"; }
+        public void saveData(String json, boolean backup) { DataStore.save(MainActivity.this, json, backup); }
+
+        @JavascriptInterface
+        public String loadData() { return DataStore.load(MainActivity.this); }
+
+        @JavascriptInterface
+        public String version() { return "1.1"; }
     }
 }

@@ -365,6 +365,9 @@ public class MainActivity extends Activity {
         public String loadData() { return DataStore.load(MainActivity.this); }
 
         @JavascriptInterface
-        public String version() { return "1.1"; }
+        public void chime() { TimerCore.playChime(MainActivity.this, null); }
+
+        @JavascriptInterface
+        public String version() { return "1.2"; }
     }
 }

@@ -11,6 +11,8 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.graphics.drawable.Icon;
 import android.media.AudioAttributes;
+import android.media.AudioFocusRequest;
+import android.media.AudioManager;
 import android.media.Ringtone;
 import android.media.RingtoneManager;
 import android.net.Uri;
@@ -156,24 +158,6 @@ final class TimerCore {
      * si sentono anche con il telefono in silenzioso, al volume della sveglia.
      */
     private static void alert(Context c, boolean sound, boolean vibrate, BroadcastReceiver.PendingResult pr) {
-        Ringtone ring = null;
-        if (sound) {
-            try {
-                Uri u = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION);
-                if (u == null) u = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM);
-                ring = RingtoneManager.getRingtone(c, u);
-                if (ring != null) {
-                    ring.setAudioAttributes(new AudioAttributes.Builder()
-                            .setUsage(AudioAttributes.USAGE_ALARM)
-                            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                            .build());
-                    ring.setLooping(true);
-                    ring.play();
-                }
-            } catch (Exception e) {
-                ring = null;
-            }
-        }
         if (vibrate) {
             try {
                 Vibrator v = c.getSystemService(Vibrator.class);
@@ -185,14 +169,49 @@ final class TimerCore {
                 }
             } catch (Exception ignored) { }
         }
-        // il suono gira per qualche secondo (2-3 ripetizioni), poi si ferma da solo
+        // il ricevitore resta vivo finché il suono non ha finito
+        if (sound) playChime(c, pr::finish);
+        else new Handler(Looper.getMainLooper()).postDelayed(pr::finish, 200);
+    }
+
+    /**
+     * Suona la marimba dell'app (res/raw/fine_recupero.wav) una volta, come una sveglia.
+     * Chiede ad Android di ABBASSARE per un attimo la musica (Spotify ecc.) mentre suona,
+     * senza metterla in pausa; poi la musica torna al volume normale.
+     * Usato sia a fine recupero con l'app chiusa sia dalla pagina con l'app aperta.
+     */
+    static void playChime(Context c, Runnable done) {
+        AudioAttributes attrs = new AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_ALARM)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                .build();
+        AudioManager am = c.getSystemService(AudioManager.class);
+        AudioFocusRequest focus = new AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
+                .setAudioAttributes(attrs)
+                .build();
+        try { am.requestAudioFocus(focus); } catch (Exception ignored) { }
+
+        Ringtone ring = null;
+        try {
+            Uri u = Uri.parse("android.resource://" + c.getPackageName() + "/" + R.raw.fine_recupero);
+            ring = RingtoneManager.getRingtone(c, u);
+            if (ring != null) {
+                ring.setAudioAttributes(attrs);
+                ring.setLooping(false);
+                ring.play();
+            }
+        } catch (Exception e) {
+            ring = null;
+        }
+
         final Ringtone r = ring;
         new Handler(Looper.getMainLooper()).postDelayed(() -> {
             if (r != null) {
                 try { r.stop(); } catch (Exception ignored) { }
             }
-            pr.finish();
-        }, r != null ? 4000 : 200);
+            try { am.abandonAudioFocusRequest(focus); } catch (Exception ignored) { }
+            if (done != null) done.run();
+        }, 1300);
     }
 
     /* ---------- notifica con il conto alla rovescia ---------- */

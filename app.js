@@ -2,7 +2,7 @@
 'use strict';
 
 const KEY = 'gymlog.v1';
-const VERSION = '2.4 · protezione dei dati';
+const VERSION = '2.6 · suono marimba';
 // dentro l'app Android esiste window.AndroidApp: timer, notifiche, file e stampa li gestisce Android
 const NATIVE = window.AndroidApp || null;
 // iPhone / iPad: l'app va aggiunta alla schermata Home da Safari; in background iOS la sospende subito
@@ -1043,15 +1043,23 @@ function unlockAudio() {
   if (!actx) try { actx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { }
   if (actx && actx.state === 'suspended') actx.resume();
 }
+// suono di fine recupero: due tocchi di marimba Re-La (lo stesso di res/raw/fine_recupero.wav)
 function beep() {
+  // app Android: lo suona Android, che abbassa per un attimo la musica
+  if (NATIVE && NATIVE.chime) { try { NATIVE.chime(); return; } catch (e) { } }
   if (!actx) return;
-  [0, 0.35, 0.7].forEach((t, i) => {
-    const o = actx.createOscillator(), g = actx.createGain();
-    o.frequency.value = i === 2 ? 1320 : 880; o.type = 'sine';
-    g.gain.setValueAtTime(0.0001, actx.currentTime + t);
-    g.gain.exponentialRampToValueAtTime(0.5, actx.currentTime + t + 0.02);
-    g.gain.exponentialRampToValueAtTime(0.0001, actx.currentTime + t + 0.28);
-    o.connect(g).connect(actx.destination); o.start(actx.currentTime + t); o.stop(actx.currentTime + t + 0.3);
+  const now = actx.currentTime;
+  // parziali della marimba: [rapporto, ampiezza, decadimento in s]
+  const mar = [[1, 1, 0.32], [3.93, 0.28, 0.07], [9.2, 0.05, 0.03]];
+  [[587.3, 0, 1], [440, 0.14, 0.95]].forEach(([f, t, vol]) => {
+    mar.forEach(([h, a, tau]) => {
+      const o = actx.createOscillator(), g = actx.createGain();
+      o.type = 'sine'; o.frequency.value = f * h;
+      g.gain.setValueAtTime(0.0001, now + t);
+      g.gain.exponentialRampToValueAtTime(0.35 * a * vol, now + t + 0.004);
+      g.gain.exponentialRampToValueAtTime(0.0001, now + t + tau * 7);
+      o.connect(g).connect(actx.destination); o.start(now + t); o.stop(now + t + tau * 7 + 0.05);
+    });
   });
 }
 function askNotify() {
